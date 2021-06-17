@@ -428,7 +428,6 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
   cudf::fill_in_place(h_buffer, 0, h_col->size(), zero);
   cudf::fill_in_place(i_buffer, 0, i_col->size(), zero);
 
-
 #if not TESTING
   cudf::type_dispatcher(y.type(),
                         compute_spline_tridiagonals{},

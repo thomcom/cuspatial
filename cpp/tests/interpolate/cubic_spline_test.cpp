@@ -113,6 +113,39 @@ TEST_F(CubicSplineTest, test_interpolate_between_control_points)
     cudf::test::fixed_width_column_wrapper<float>{{3, 2, 3, 4, 3, 3, 2, 3, 4, 3, 3, 2, 3, 4, 3}});
 }
 
+TEST_F(CubicSplineTest, test_interpolate_between_control_points)
+{
+  cudf::test::fixed_width_column_wrapper<float> t_column{
+    {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4}};
+  cudf::test::fixed_width_column_wrapper<float> new_column{
+    {0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 0.0, 0.5, 1.0, 1.5, 2.0,
+     2.5, 3.0, 3.5, 4.0, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0}};
+  cudf::test::fixed_width_column_wrapper<float> x_column{
+    {3, 2, 3, 4, 3, 3, 2, 3, 4, 3, 3, 2, 3, 4, 3}};
+  cudf::test::fixed_width_column_wrapper<int> ids_column{{0, 0, 1, 2}};
+  cudf::test::fixed_width_column_wrapper<int> prefix_column{{0, 5, 10, 15}};
+  cudf::test::fixed_width_column_wrapper<int> old_point_ids_column{
+    {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2}};
+  cudf::test::fixed_width_column_wrapper<int> new_point_ids_column{
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2}};
+
+  auto splines = cuspatial::cubicspline_coefficients(t_column, x_column, ids_column, prefix_column);
+
+  auto interpolants_new = cuspatial::cubicspline_interpolate(
+    new_column, new_point_ids_column, prefix_column, t_column, *splines);
+
+  auto gather_map = cudf::test::fixed_width_column_wrapper<int16_t>{
+    0, 2, 4, 6, 8, 9, 11, 13, 15, 17, 18, 20, 22, 24, 26};
+  auto interpolants_gather =
+    cudf::gather(cudf::table_view{std::vector<cudf::column_view>{interpolants_new->view()}},
+                 gather_map)
+      ->get_column(0);
+
+  cudf::test::expect_columns_equivalent(
+    interpolants_gather,
+    cudf::test::fixed_width_column_wrapper<float>{{3, 2, 3, 4, 3, 3, 2, 3, 4, 3, 3, 2, 3, 4, 3}});
+}
+
 TEST_F(CubicSplineTest, test_interpolate_single)
 {
   cudf::test::fixed_width_column_wrapper<float> t_column{{0, 1, 2, 3, 4}};
