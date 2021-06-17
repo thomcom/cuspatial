@@ -35,6 +35,7 @@
 struct CubicSplineTest : public cudf::test::BaseFixture {
 };
 
+/*
 TEST_F(CubicSplineTest, test_coefficients_single)
 {
   cudf::test::fixed_width_column_wrapper<float> t_column{{0, 1, 2, 3, 4}};
@@ -78,7 +79,7 @@ TEST_F(CubicSplineTest, test_coefficients_full)
     *splines,
     cudf::table_view{{detail3_expected, detail2_expected, detail1_expected, detail0_expected}});
 }
-
+*/
 TEST_F(CubicSplineTest, test_interpolate_between_control_points)
 {
   cudf::test::fixed_width_column_wrapper<float> t_column{
@@ -269,3 +270,22 @@ TEST_F(CubicSplineTest, test_parallel_search_triple_end_values)
                                         cudf::test::fixed_width_column_wrapper<int>{
                                           {3, 3, 3, 3, 3, 7, 7, 7, 7, 7, 11, 11, 11, 11, 11}});
 }
+
+TEST_F(CubicSplineTest, test_value_specific_corner_case)
+{
+  cudf::test::fixed_width_column_wrapper<float> t_column{{1.0, 2.0, 3.0, 4.0, 5.0}};
+  cudf::test::fixed_width_column_wrapper<float> x_column{{2.0, 11.0, 3.0, 1.0, 5.0}};
+  // cudf::test::fixed_width_column_wrapper<float> x_column{{3, 2, 3, 4, 3}};
+  cudf::test::fixed_width_column_wrapper<int> ids_column{{0, 0}};
+  cudf::test::fixed_width_column_wrapper<int> prefix_column{{0, 5}};
+  cudf::test::fixed_width_column_wrapper<int> point_ids_column{{0, 0, 0, 0, 0}};
+
+  auto splines = cuspatial::cubicspline_coefficients(t_column, x_column, ids_column, prefix_column);
+
+  auto interpolants = cuspatial::cubicspline_interpolate(
+    t_column, point_ids_column, prefix_column, t_column, *splines);
+
+  cudf::test::expect_columns_equivalent(
+    *interpolants, cudf::test::fixed_width_column_wrapper<float>{{2, 11, 3, 1, 5}});
+}
+

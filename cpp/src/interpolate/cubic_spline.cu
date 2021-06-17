@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 
+#include <cudf/column/column.hpp>
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/filling.hpp>
 #include <cudf/scalar/scalar.hpp>
+
+#include <cudf_test/base_fixture.hpp>
+#include <cudf_test/column_utilities.hpp>
+#include <cudf_test/column_wrapper.hpp>
+#include <cudf_test/table_utilities.hpp>
+#include <cudf_test/type_lists.hpp>
 
 #include <cuspatial/cubic_spline.hpp>
 #include <cuspatial/cusparse_error.hpp>
@@ -202,6 +209,7 @@ struct compute_spline_tridiagonals {
     cudf::column_view const& prefixes,
     cudf::mutable_column_view const& D,
     cudf::mutable_column_view const& Dlu,
+    cudf::mutable_column_view const& Dll,
     cudf::mutable_column_view const& u,
     cudf::mutable_column_view const& h,
     cudf::mutable_column_view const& i,
@@ -213,13 +221,14 @@ struct compute_spline_tridiagonals {
     const int32_t* p_prefixes = prefixes.data<int32_t>();
     T* p_d                    = D.data<T>();
     T* p_dlu                  = Dlu.data<T>();
+    T* p_dll                  = Dll.data<T>();
     T* p_u                    = u.data<T>();
     T* p_h                    = h.data<T>();
     T* p_i                    = i.data<T>();
     thrust::for_each(rmm::exec_policy(stream),
                      thrust::make_counting_iterator<int32_t>(1),
                      thrust::make_counting_iterator<int32_t>(prefixes.size()),
-                     [p_t, p_y, p_prefixes, p_d, p_dlu, p_u, p_h, p_i] __device__(int32_t index) {
+                     [p_t, p_y, p_prefixes, p_d, p_dlu, p_dll, p_u, p_h, p_i] __device__(int32_t index) {
                        int32_t n  = p_prefixes[index] - p_prefixes[index - 1];
                        int32_t h  = p_prefixes[index - 1];
                        int32_t ci = 0;
@@ -231,7 +240,10 @@ struct compute_spline_tridiagonals {
                          p_d[h + ci + 1] = (p_h[h + ci + 1] + p_h[h + (n - 2) - ci]) * 2;
                          p_u[h + ci + 1] = (p_i[h + ci + 1] - p_i[h + (n - 2) - ci]) * 6;
                        }
-                       for (ci = 0; ci < n - 3; ++ci) { p_dlu[h + ci + 1] = p_i[h + ci + 1]; }
+                       for (ci = 0; ci < n - 3; ++ci) {
+                         p_dlu[h + ci + 1] = p_i[h + ci + 1];
+                         p_dll[h + ci] = p_i[h + ci + 1];
+                       }
                      });
   }
   template <typename T>
@@ -241,6 +253,7 @@ struct compute_spline_tridiagonals {
     cudf::column_view const& prefixes,
     cudf::mutable_column_view const& D,
     cudf::mutable_column_view const& Dlu,
+    cudf::mutable_column_view const& Dll,
     cudf::mutable_column_view const& u,
     cudf::mutable_column_view const& h,
     cudf::mutable_column_view const& i,
@@ -382,25 +395,41 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
   int64_t n       = y.size();
   auto h_col      = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
   auto i_col      = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
+  auto zero = cudf::numeric_scalar<float>(0.0);
+  auto one  = cudf::numeric_scalar<float>(1.0);
+#ifdef TESTING
+  cudf::test::fixed_width_column_wrapper<float> D_buffer({1.0, 4.0, 4.0, 4.0, 1.0});
+  cudf::test::fixed_width_column_wrapper<float> Dlu_buffer({0.0, -8.0, -2.0, 0.0, 0.0});
+  //cudf::test::fixed_width_column_wrapper<float> Dll_buffer({0.0, -8.0, -2.0, 0.0, 0.0});
+  //cudf::test::fixed_width_column_wrapper<float> Dlu_buffer({-8.0, -2.0, 0.0, 0.0, 0.0});
+  cudf::test::fixed_width_column_wrapper<float> Dll_buffer({-8.0, -2.0, 0.0, 0.0, 0.0});
+  cudf::test::fixed_width_column_wrapper<float> u_buffer({0.0, -72.0, 0.0, -72.0, 0.0});
+  
+  auto d = static_cast<cudf::column_view>(D_buffer);
+  auto dlu = static_cast<cudf::column_view>(Dlu_buffer);
+  auto dll = static_cast<cudf::column_view>(Dll_buffer);
+  auto u = static_cast<cudf::mutable_column_view>(u_buffer);
+#else
   auto D_col      = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
   auto Dlu_col    = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
   auto Dll_col    = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
   auto u_col      = make_numeric_column(y.type(), n, cudf::mask_state::UNALLOCATED, stream, mr);
-  auto h_buffer   = h_col->mutable_view();
-  auto i_buffer   = i_col->mutable_view();
   auto D_buffer   = D_col->mutable_view();
-  auto Dlu_buffer = Dll_col->mutable_view();
+  auto Dlu_buffer = Dlu_col->mutable_view();
   auto Dll_buffer = Dll_col->mutable_view();
   auto u_buffer   = u_col->mutable_view();
-
-  auto zero = cudf::numeric_scalar<float>(0.0);
-  auto one  = cudf::numeric_scalar<float>(1.0);
-  cudf::fill_in_place(h_buffer, 0, h_col->size(), zero);
-  cudf::fill_in_place(i_buffer, 0, i_col->size(), zero);
   cudf::fill_in_place(D_buffer, 0, D_col->size(), one);
   cudf::fill_in_place(Dlu_buffer, 0, Dlu_col->size(), zero);
+  cudf::fill_in_place(Dll_buffer, 0, Dll_col->size(), zero);
   cudf::fill_in_place(u_buffer, 0, u_col->size(), zero);
+#endif 
+  auto h_buffer   = h_col->mutable_view();
+  auto i_buffer   = i_col->mutable_view();
+  cudf::fill_in_place(h_buffer, 0, h_col->size(), zero);
+  cudf::fill_in_place(i_buffer, 0, i_col->size(), zero);
 
+
+#if not TESTING
   cudf::type_dispatcher(y.type(),
                         compute_spline_tridiagonals{},
                         t,
@@ -408,11 +437,20 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
                         prefixes,
                         D_buffer,
                         Dlu_buffer,
+                        Dll_buffer,
                         u_buffer,
                         h_buffer,
                         i_buffer,
                         stream,
                         mr);
+#endif
+
+  cudf::test::print(D_buffer, std::cout, "\t");
+  cudf::test::print(Dlu_buffer, std::cout, "\t");
+  cudf::test::print(Dll_buffer, std::cout, "\t");
+  cudf::test::print(u_buffer, std::cout, "\t");
+  cudf::test::print(h_buffer, std::cout, "\t");
+  cudf::test::print(i_buffer, std::cout, "\t");
 
   // cusparse solve n length m tridiagonal systems
   // 4. call cusparse<T>gtsv2() to solve
@@ -434,6 +472,29 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
   int32_t batchStride = y.size() / (prefixes.size() - 1);
   int32_t batchSize   = batchStride;
 
+#ifdef TESTING
+  CUSPARSE_TRY(cusparseSgtsv2StridedBatch_bufferSizeExt(handle,
+                                                        batchSize,
+                                                        dll.data<float>(), 
+                                                        d.data<float>(),
+                                                        dlu.data<float>(),
+                                                        u.data<float>(),
+                                                        prefixes.size() - 1,
+                                                        batchStride,
+                                                        &pBufferSize));
+
+  rmm::device_vector<float> pBuffer(pBufferSize);
+
+  CUSPARSE_TRY(cusparseSgtsv2StridedBatch(handle,
+                                          batchSize,
+                                          dll.data<float>(),
+                                          d.data<float>(),
+                                          dlu.data<float>(),
+                                          u.data<float>(),
+                                          prefixes.size() - 1,
+                                          batchStride,
+                                          pBuffer.data().get()));
+#else
   CUSPARSE_TRY(cusparseSgtsv2StridedBatch_bufferSizeExt(handle,
                                                         batchSize,
                                                         Dll_buffer.data<float>(),
@@ -443,7 +504,7 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
                                                         prefixes.size() - 1,
                                                         batchStride,
                                                         &pBufferSize));
-
+  
   rmm::device_vector<float> pBuffer(pBufferSize);
 
   CUSPARSE_TRY(cusparseSgtsv2StridedBatch(handle,
@@ -455,6 +516,7 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
                                           prefixes.size() - 1,
                                           batchStride,
                                           pBuffer.data().get()));
+#endif
 
   CUSPARSE_TRY(cusparseDestroy(handle));
 
@@ -468,6 +530,15 @@ std::unique_ptr<cudf::table> cubicspline_coefficients(cudf::column_view const& t
   auto d2     = d2_col->mutable_view();
   auto d1     = d1_col->mutable_view();
   auto d0     = d0_col->mutable_view();
+
+  std::cout << "Computed the u buffer." << std::endl;
+  cudf::test::print(D_buffer, std::cout, "\t");
+  cudf::test::print(Dlu_buffer, std::cout, "\t");
+  cudf::test::print(Dll_buffer, std::cout, "\t");
+  cudf::test::print(u_buffer, std::cout, "\t");
+  cudf::test::print(h_buffer, std::cout, "\t");
+  cudf::test::print(i_buffer, std::cout, "\t");
+  std::cout << std::endl;
 
   cudf::type_dispatcher(y.type(),
                         coefficients_compute{},
