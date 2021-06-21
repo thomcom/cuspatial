@@ -41,7 +41,7 @@ function(ConfigureBench CMAKE_BENCH_NAME)
     add_executable(${CMAKE_BENCH_NAME} ${ARGN})
     set_target_properties(${CMAKE_BENCH_NAME}
         PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<BUILD_INTERFACE:${CUSPATIAL_BINARY_DIR}/gbenchmarks>")
-    target_link_libraries(${CMAKE_BENCH_NAME} PRIVATE benchmark::benchmark_main cuspatial_benchmark_common cudf::cudftestutil)
+    target_link_libraries(${CMAKE_BENCH_NAME} PRIVATE benchmark::benchmark_main cuspatial_benchmark_common)
 endfunction(ConfigureBench)
 
 ###################################################################################################
@@ -51,5 +51,5 @@ endfunction(ConfigureBench)
 ###################################################################################################
 # - hausdorff benchmark ---------------------------------------------------------------------------
 
-#ConfigureBench(HAUSDORFF_BENCH
-  #hausdorff_benchmark.cpp)
+ConfigureBench(HAUSDORFF_BENCH
+    hausdorff_benchmark.cpp)
